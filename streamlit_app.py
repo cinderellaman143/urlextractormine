@@ -8,7 +8,7 @@ import time
 from collections import deque
 
 # --- Page Config ---
-st.set_page_config(page_title="Deep Sitemap Extractor", page_icon="🕸️", layout="wide")
+st.set_page_config(page_title="Fast Homepage Extractor", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -34,13 +34,15 @@ def get_sitemap_from_robots(domain_url):
         pass
     return sitemaps
 
-def is_sitemap_url(url):
+def is_homepage(url):
     """
-    Heuristic to determine if a URL found in a <url> tag 
-    is actually another sitemap.
+    Checks if a URL is a root homepage (e.g., https://sub.domain.com/ or https://sub.domain.com)
+    and excludes files or deep paths.
     """
-    u = url.lower()
-    return u.endswith('.xml') or u.endswith('.xml.gz') or 'sitemap' in u
+    parsed = urlparse(url)
+    path = parsed.path
+    # True if path is empty or just '/'
+    return path in ['', '/']
 
 def fetch_and_parse(url):
     """
@@ -59,25 +61,26 @@ def fetch_and_parse(url):
             try:
                 content = gzip.GzipFile(fileobj=io.BytesIO(content)).read()
             except:
-                return None # Failed to unzip
+                return None 
 
-        # Parse XML
         return ET.fromstring(content)
     except Exception:
         return None
 
-def crawler(start_sitemaps):
+def fast_crawler(start_sitemaps):
     """
-    Iterative crawler using a Queue to handle deep nesting without recursion limits.
+    Crawler that only follows explicit <sitemap> tags and extracts only Homepage URLs.
+    It does NOT recurse into <url> tags (even if they are xml).
     """
     queue = deque(start_sitemaps)
     visited_sitemaps = set()
     collected_domains = set()
     
-    # Progress UI containers
     status_text = st.empty()
     bar = st.progress(0)
     
+    # We use a placeholder for total count to show progress isn't stuck
+    count_placeholder = st.empty()
     processed_count = 0
     
     while queue:
@@ -95,10 +98,10 @@ def crawler(start_sitemaps):
 
         # Parse Children
         for child in root:
-            # Strip namespace (e.g. {http://www.sitemaps.org/schemas/sitemap/0.9})
+            # Strip namespace
             tag = child.tag.split('}')[-1]
             
-            # Extract the <loc> text
+            # Extract <loc>
             loc = None
             for sub in child:
                 if sub.tag.split('}')[-1] == 'loc':
@@ -108,19 +111,16 @@ def crawler(start_sitemaps):
             if not loc:
                 continue
 
-            # LOGIC 1: Standard Sitemap Index (<sitemap>)
+            # LOGIC 1: Sitemap Index (<sitemap>) -> ALWAYS FOLLOW (These are folders/categories)
             if tag == 'sitemap':
                 if loc not in visited_sitemaps:
                     queue.append(loc)
             
-            # LOGIC 2: Standard URL (<url>), BUT we check if it's a hidden sitemap
+            # LOGIC 2: Standard URL (<url>) -> ONLY KEEP HOMEPAGES, DO NOT RECURSE
             elif tag == 'url':
-                # Check your specific case: <loc>.../sitemap.xml</loc> inside a <url> tag
-                if is_sitemap_url(loc):
-                    if loc not in visited_sitemaps:
-                        queue.append(loc)
-                else:
-                    # It's a real page, extract domain
+                # Only keep if it is a root homepage
+                if is_homepage(loc):
+                    # Extract pure domain to ensure uniqueness
                     try:
                         domain = urlparse(loc).netloc
                         if domain:
@@ -129,8 +129,10 @@ def crawler(start_sitemaps):
                         pass
         
         processed_count += 1
-        # Update progress roughly (visual only)
-        if processed_count % 5 == 0:
+        count_placeholder.caption(f"Sitemaps processed: {processed_count} | Unique Domains found: {len(collected_domains)}")
+        
+        # Simple progress bar animation
+        if processed_count % 10 == 0:
             pass 
 
     bar.empty()
@@ -139,45 +141,46 @@ def crawler(start_sitemaps):
 
 # --- UI ---
 
-st.title("🕸️ Deep Recursive Subdomain Extractor")
-st.info("Designed for complex sitemap structures where sitemaps are nested inside `<url>` tags.")
+st.title("⚡ Fast Sitemap Homepage Extractor")
+st.markdown("""
+This tool is optimized for speed. 
+1. It follows `Sitemap Indexes`.
+2. It **only extracts Homepage URLs** (e.g. `sub.domain.com/`).
+3. It ignores deep pages and deep sitemaps to finish quickly.
+""")
 
 url_input = st.text_input("Enter Domain URL:", "https://wiswindows.com/")
-start = st.button("Start Extraction", type="primary")
+start = st.button("Start Fast Extraction", type="primary")
 
 if start and url_input:
     if not url_input.startswith("http"):
         url_input = "https://" + url_input
 
     with st.spinner("Checking robots.txt..."):
-        # 1. Get Initial Sitemaps
         initial_sitemaps = get_sitemap_from_robots(url_input)
         
         if not initial_sitemaps:
-            # Fallback
             fallback = urljoin(url_input, "sitemap.xml")
             st.warning(f"No sitemap in robots.txt. Trying {fallback}")
             initial_sitemaps = [fallback]
         else:
             st.success(f"Found entry point: {initial_sitemaps[0]}")
 
-    # 2. Crawl
-    results = crawler(initial_sitemaps)
+    results = fast_crawler(initial_sitemaps)
 
-    # 3. Output
     if results:
-        st.success(f"Extraction Complete! Found {len(results)} unique subdomains.")
+        st.success(f"Done! Found {len(results)} unique domains.")
         
         results_string = "\n".join(results)
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.text_area("Extracted Subdomains", results_string, height=400)
+            st.text_area("Extracted Domains", results_string, height=400)
         with col2:
             st.download_button(
-                "Download .txt",
+                "Download List",
                 results_string,
-                file_name="subdomains.txt",
+                file_name="fast_subdomains.txt",
                 mime="text/plain"
             )
     else:
